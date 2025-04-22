@@ -9,7 +9,8 @@ import logging
 import os
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log_level = os.environ.get("LOG_LEVEL", "INFO")
+logging.basicConfig(level=getattr(logging, log_level), format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Configuration from environment variables with defaults
@@ -21,7 +22,7 @@ NORDPOOL_DAY_AHEAD_URL = os.environ.get("NORDPOOL_DAY_AHEAD_URL", "https://api.s
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Helsinki")
 UPDATE_INTERVAL = int(os.environ.get("UPDATE_INTERVAL", 300))
 BAR_CHART_OFFSET = int(os.environ.get("BAR_CHART_OFFSET", 9))
-COLOR_THRESHOLDS = json.loads(os.environ.get("COLOR_THRESHOLDS", '{"0": "#00FF00", "8": "#FFFF00", "16": "#FF0000"'))
+COLOR_THRESHOLDS = json.loads(os.environ.get("COLOR_THRESHOLDS", '{"0": "#00FF00", "8": "#FFFF00", "16": "#FF0000"}'))
 
 logger.info(f"COLOR_THRESHOLDS: {COLOR_THRESHOLDS}")
 
@@ -133,21 +134,89 @@ def get_day_ahead_prices():
         return None
 
 def get_price_color(price):
-    """Determine color based on price thresholds"""
-    # Convert threshold keys to float and sort them numerically in descending order
-    sorted_thresholds = sorted([float(threshold) for threshold in COLOR_THRESHOLDS.keys()], reverse=True)
+    """
+        Determine color based on price thresholds with smooth transitions between thresholds.
+        
+        Args:
+            price (float): The price value to evaluate
+            
+        Returns:
+            str: Hex color code based on the threshold the price falls into,
+                 with smooth transitions between threshold colors
+    """
+    # Convert threshold keys to float and sort them in ascending order
+    thresholds = sorted([float(threshold) for threshold in COLOR_THRESHOLDS.keys()])
     
-    for threshold_float in sorted_thresholds:
-        # Convert back to string for dictionary lookup
-        threshold = str(int(threshold_float)) if threshold_float.is_integer() else str(threshold_float)
-        if price >= threshold_float:
-            logger.debug(f"Price {price} >= threshold {threshold_float}, using color {COLOR_THRESHOLDS[threshold]}")
-            return COLOR_THRESHOLDS[threshold]
+    # If price is below the lowest threshold, use the lowest threshold color
+    if price < thresholds[0]:
+        threshold_key = str(int(thresholds[0])) if thresholds[0] == int(thresholds[0]) else str(thresholds[0])
+        return COLOR_THRESHOLDS[threshold_key]
     
-    # If no threshold matched, use the lowest threshold color
-    lowest_threshold = str(min([float(t) for t in COLOR_THRESHOLDS.keys()]))
-    logger.debug(f"No threshold matched, using default color {COLOR_THRESHOLDS[lowest_threshold]}")
-    return COLOR_THRESHOLDS[lowest_threshold]
+    # If price is above the highest threshold, use the highest threshold color
+    if price >= thresholds[-1]:
+        threshold_key = str(int(thresholds[-1])) if thresholds[-1] == int(thresholds[-1]) else str(thresholds[-1])
+        return COLOR_THRESHOLDS[threshold_key]
+    
+    # Find the two thresholds that the price falls between
+    lower_threshold = None
+    upper_threshold = None
+    
+    for i in range(len(thresholds) - 1):
+        if thresholds[i] <= price < thresholds[i + 1]:
+            lower_threshold = thresholds[i]
+            upper_threshold = thresholds[i + 1]
+            break
+    
+    # If we couldn't find appropriate thresholds, use the default color
+    if lower_threshold is None or upper_threshold is None:
+        threshold_key = str(int(thresholds[0])) if thresholds[0] == int(thresholds[0]) else str(thresholds[0])
+        return COLOR_THRESHOLDS[threshold_key]
+    
+    # Convert thresholds to string keys for the COLOR_THRESHOLDS dictionary
+    lower_key = str(int(lower_threshold)) if lower_threshold == int(lower_threshold) else str(lower_threshold)
+    upper_key = str(int(upper_threshold)) if upper_threshold == int(upper_threshold) else str(upper_threshold)
+    
+    # Get the colors for the lower and upper thresholds
+    lower_color = COLOR_THRESHOLDS[lower_key]
+    upper_color = COLOR_THRESHOLDS[upper_key]
+    
+    # Calculate how far between the thresholds the price is (0.0 to 1.0)
+    ratio = (price - lower_threshold) / (upper_threshold - lower_threshold)
+    
+    # Blend the colors based on the ratio
+    blended_color = blend_colors(lower_color, upper_color, ratio)
+    
+    logger.debug(f"Price {price} is between {lower_threshold} and {upper_threshold}, " 
+                f"ratio: {ratio:.2f}, blended color: {blended_color}")
+    
+    return blended_color
+    
+def blend_colors(color1, color2, ratio):
+    """
+    Blend two hex colors based on a ratio.
+    
+    Args:
+        color1 (str): First hex color code (e.g., "#00FF00")
+        color2 (str): Second hex color code (e.g., "#FF0000")
+        ratio (float): Blend ratio from 0.0 (100% color1) to 1.0 (100% color2)
+    
+    Returns:
+        str: Blended hex color code
+    """
+    # Ensure ratio is between 0 and 1
+    ratio = max(0, min(1, ratio))
+    
+    # Convert hex colors to RGB
+    r1, g1, b1 = int(color1[1:3], 16), int(color1[3:5], 16), int(color1[5:7], 16)
+    r2, g2, b2 = int(color2[1:3], 16), int(color2[3:5], 16), int(color2[5:7], 16)
+    
+    # Blend the colors
+    r = int(r1 * (1 - ratio) + r2 * ratio)
+    g = int(g1 * (1 - ratio) + g2 * ratio)
+    b = int(b1 * (1 - ratio) + b2 * ratio)
+    
+    # Convert back to hex
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 def create_hourly_bar(hourly_prices):
     """
