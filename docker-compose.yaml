@@ -1,0 +1,31 @@
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:latest
+    container_name: mqtt-broker
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
+  nordpool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nordpool-client
+    depends_on:
+      - mqtt
+    environment:
+      - MQTT_BROKER=mqtt
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=awtrix/custom/nordpool
+      - UPDATE_INTERVAL=300
+      - BAR_CHART_OFFSET=9
+      - >-
+        COLOR_THRESHOLDS={"0": "#00FF00", "8": "#FFFF00", "16": "#FF0000"}
+    restart: unless-stopped
+
