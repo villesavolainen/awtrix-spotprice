@@ -18,7 +18,7 @@ MQTT_BROKER = os.environ.get("MQTT_BROKER", "mqtt_broker_address")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "awtrix/custom/nordpool")
 NORDPOOL_API_URL = os.environ.get("NORDPOOL_API_URL", "https://api.spot-hinta.fi/JustNow")
-NORDPOOL_DAY_AHEAD_URL = os.environ.get("NORDPOOL_DAY_AHEAD_URL", "https://api.spot-hinta.fi/Today")
+NORDPOOL_DAY_AHEAD_URL = os.environ.get("NORDPOOL_DAY_AHEAD_URL", "https://api.spot-hinta.fi/TodayAndDayForward")
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Helsinki")
 UPDATE_INTERVAL = int(os.environ.get("UPDATE_INTERVAL", 300))
 BAR_CHART_OFFSET = int(os.environ.get("BAR_CHART_OFFSET", 9))
@@ -81,28 +81,45 @@ def get_day_ahead_prices():
         # Parse the response
         data = response.json()
         
-        # Create a dictionary to map hour to price
-        hour_to_price = {}
+        # Create a list to store price data with timestamps
+        price_data = []
         
         for hour_data in data:
             # Extract timestamp and price
             timestamp_str = hour_data.get("DateTime")
             price = hour_data.get("PriceNoTax", 0) * 100  # Convert to cents
             
-            # Parse timestamp to get hour
+            # Parse timestamp
             if timestamp_str:
                 timestamp = datetime.datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 timestamp = timestamp.astimezone(pytz.timezone(TIMEZONE))
-                hour = timestamp.hour
-                hour_to_price[hour] = price
+                price_data.append({"timestamp": timestamp, "price": price})
         
-        # Create ordered list of prices for all 24 hours
+        # Sort by timestamp
+        price_data.sort(key=lambda x: x["timestamp"])
+        
+        # Get the start of today
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Create a 48-hour price array (today and tomorrow)
         hourly_prices = []
-        for hour in range(24):
-            if hour in hour_to_price:
-                hourly_prices.append(hour_to_price[hour])
-            else:
-                # If we don't have data for this hour, use None or a default value
+        
+        # Fill in prices for the next 48 hours
+        for i in range(48):
+            target_time = today_start + datetime.timedelta(hours=i)
+            price_found = False
+            
+            for price_item in price_data:
+                # Check if this price item matches the target hour
+                if (price_item["timestamp"].year == target_time.year and
+                    price_item["timestamp"].month == target_time.month and
+                    price_item["timestamp"].day == target_time.day and
+                    price_item["timestamp"].hour == target_time.hour):
+                    hourly_prices.append(price_item["price"])
+                    price_found = True
+                    break
+            
+            if not price_found:
                 hourly_prices.append(None)
         
         # Calculate next update time (today at 14:05 or tomorrow if it's already past 14:05)
@@ -115,7 +132,7 @@ def get_day_ahead_prices():
         hourly_prices_cache["timestamp"] = now
         hourly_prices_cache["next_update_time"] = next_update
         
-        logger.info(f"Fetched day-ahead prices for {len(hourly_prices)} hours, next update at {next_update}")
+        logger.info(f"Fetched day-ahead prices for {len(price_data)} hours, next update at {next_update}")
         return hourly_prices
         
     except requests.exceptions.RequestException as e:
@@ -221,14 +238,21 @@ def blend_colors(color1, color2, ratio):
 def create_hourly_bar(hourly_prices):
     """
     Create a bar chart visualization for hourly prices
-    Draws a full 24-hour bar chart starting from the specified offset
+    Draws a bar chart starting from the current hour and showing future hours
+    with colored time markers at key hours of the day
     """
     if not hourly_prices or len(hourly_prices) == 0:
         return None
     
     # Get current hour
     now = datetime.datetime.now(pytz.timezone(TIMEZONE))
-    current_hour = now.hour
+    
+    # Calculate the hour index in our 48-hour array
+    current_hour_index = now.hour
+    
+    # If it's the next day, add 24 to the index
+    if now.day > now.replace(hour=0, minute=0, second=0, microsecond=0).day:
+        current_hour_index += 24
     
     # Create bar chart with dots for each hour
     bar_chart = []
@@ -236,11 +260,14 @@ def create_hourly_bar(hourly_prices):
     # Use the configured offset for the bar chart
     offset_pixels = BAR_CHART_OFFSET
     
-    # Draw each hour's price as a colored dot
-    for hour in range(24):
-        # Get price for this hour (handle None values)
-        if hour < len(hourly_prices) and hourly_prices[hour] is not None:
-            price = hourly_prices[hour]
+    # Calculate how many hours we can show (maximum 24)
+    hours_to_show = min(24, len(hourly_prices) - current_hour_index)
+    
+    # Draw each hour's price as a colored dot, starting from current hour
+    for i in range(hours_to_show):
+        hour_index = current_hour_index + i
+        if hour_index < len(hourly_prices) and hourly_prices[hour_index] is not None:
+            price = hourly_prices[hour_index]
             color = get_price_color(price)
         else:
             # Use a default color for missing data
@@ -248,17 +275,40 @@ def create_hourly_bar(hourly_prices):
         
         # Draw pixel command for each hour
         dot = {
-            "dp": [offset_pixels + hour, 7, color]  # dp = Draw Pixel at [x, y, color]
+            "dp": [offset_pixels + i, 7, color]  # dp = Draw Pixel at [x, y, color]
         }
         bar_chart.append(dot)
     
-    # Add current hour indicator (purple dot one row above)
-    if 0 <= current_hour < 24:
-        current_hour_indicator = {
-            "dp": [offset_pixels + current_hour, 6, "#800080"]  # Purple dot
-        }
-        bar_chart.append(current_hour_indicator)
+    # # Add current hour indicator (purple dot one row above the first pixel)
+    # current_hour_indicator = {
+    #     "dp": [offset_pixels, 6, "#800080"]  # Purple dot
+    # }
+    # bar_chart.append(current_hour_indicator)
+    
+    # Add time markers for specific hours
+    for i in range(hours_to_show):
+        # Calculate the actual hour of day (0-23) for this position
+        actual_hour = (current_hour_index + i) % 24
         
+        # Position for the time marker (one row above the price bar)
+        marker_x = offset_pixels + i
+        marker_y = 6  # Two rows above the price bar
+        
+        # Add colored markers for specific hours
+        if actual_hour == 0:  # Midnight
+            bar_chart.append({"dp": [marker_x, marker_y, "#000080"]})  # Dark blue
+        elif actual_hour == 6:  # 6 AM
+            bar_chart.append({"dp": [marker_x, marker_y, "#87CEEB"]})  # Light blue
+        elif actual_hour == 9:  # 9 AM
+            bar_chart.append({"dp": [marker_x, marker_y, "#FFA500"]})  # Orange
+        elif actual_hour == 12:  # Noon
+            bar_chart.append({"dp": [marker_x, marker_y, "#FFFF00"]})  # Yellow
+        elif actual_hour == 18:  # 6 PM
+            bar_chart.append({"dp": [marker_x, marker_y, "#FF69B4"]})  # Pink/Purple
+        elif actual_hour == 21:  # 9 PM
+            bar_chart.append({"dp": [marker_x, marker_y, "#800080"]})  # Dark purple
+    
+    logger.debug(f"Created bar chart starting from hour index {current_hour_index}, showing {hours_to_show} hours ahead")
     return bar_chart
 
 def format_awtrix_message(price, hourly_prices=None):
@@ -275,7 +325,7 @@ def format_awtrix_message(price, hourly_prices=None):
     
     # Create Awtrix message
     awtrix_message = {
-        "text": f"{price_str} c",
+        "text": f"{price_str}",
         "textCase": "2",
         "icon": "54077",  # Lightning bolt icon (you can change this)
         "color": "#00FF00",  # Green color for the text (default)
@@ -327,7 +377,7 @@ def main():
             # Get day-ahead prices for all hours
             hourly_prices = get_day_ahead_prices()
             print(f"hourly_prices: {hourly_prices}")
-            
+            print(hourly_prices_cache)
             # Format and publish message
             message = format_awtrix_message(price, hourly_prices)
             publish_to_awtrix(mqtt_client, message)
