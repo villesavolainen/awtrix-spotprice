@@ -297,14 +297,14 @@ def create_hourly_bar(hourly_prices):
         # Add colored markers for specific hours
         if actual_hour == 0:  # Midnight
             bar_chart.append({"dp": [marker_x, marker_y, "#000080"]})  # Dark blue
-        elif actual_hour == 6:  # 6 AM
-            bar_chart.append({"dp": [marker_x, marker_y, "#87CEEB"]})  # Light blue
-        elif actual_hour == 9:  # 9 AM
-            bar_chart.append({"dp": [marker_x, marker_y, "#FFA500"]})  # Orange
-        elif actual_hour == 12:  # Noon
-            bar_chart.append({"dp": [marker_x, marker_y, "#FFFF00"]})  # Yellow
-        elif actual_hour == 18:  # 6 PM
-            bar_chart.append({"dp": [marker_x, marker_y, "#FF69B4"]})  # Pink/Purple
+        # elif actual_hour == 6:  # 6 AM
+        #     bar_chart.append({"dp": [marker_x, marker_y, "#87CEEB"]})  # Light blue
+        # elif actual_hour == 9:  # 9 AM
+        #     bar_chart.append({"dp": [marker_x, marker_y, "#FFA500"]})  # Orange
+        # elif actual_hour == 12:  # Noon
+        #     bar_chart.append({"dp": [marker_x, marker_y, "#FFFF00"]})  # Yellow
+        # elif actual_hour == 18:  # 6 PM
+        #     bar_chart.append({"dp": [marker_x, marker_y, "#FF69B4"]})  # Pink/Purple
         elif actual_hour == 21:  # 9 PM
             bar_chart.append({"dp": [marker_x, marker_y, "#800080"]})  # Dark purple
     
